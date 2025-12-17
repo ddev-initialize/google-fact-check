@@ -188,7 +188,7 @@ class FactCheckCollector:
         # International
         queries.extend([
             "China", "Russia", "Europe", "UK", "India", "Israel",
-            "Ukraine", "Iran", "Mexico", "UN", "NATO"
+            "Ukraine", "Iran", "Mexico", "UN", "NATO", "world"
         ])
 
         # Short high-frequency terms
