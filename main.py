@@ -216,18 +216,25 @@ async def main():
         logger.info("PHASE 1: Publisher Discovery")
         logger.info("=" * 70)
 
-        publishers = await collector.discover_publishers(max_queries=200)
-        publishers_list = sorted(list(publishers))
-
-        storage.save_json(publishers_list, "publishers.json")
-        logger.info(
-            f"Saved {len(publishers_list)} publishers to publishers.json")
+        publishers_file = storage.output_dir / "publishers.json"
+        if publishers_file.exists():
+            logger.info("Found existing publishers.json, loading...")
+            loaded_data = storage.load_json("publishers.json")
+            assert isinstance(loaded_data, list)
+            publishers_list: list[str] = loaded_data
+            logger.info(f"Loaded {len(publishers_list)} publishers from cache")
+        else:
+            publishers = await collector.discover_publishers(max_queries=200)
+            publishers_list = sorted(list(publishers))
+            storage.save_json(publishers_list, "publishers.json")
+            logger.info(
+                f"Saved {len(publishers_list)} publishers to publishers.json")
 
         logger.info("=" * 70)
         logger.info("PHASE 2: Collecting Fact Checks")
         logger.info("=" * 70)
 
-        raw_output = f"factchecks_raw_{timestamp}.parquet"
+        raw_output = f"factchecks_raw_{timestamp}.jsonl"
         publisher_stats = await collector.collect_from_publishers(
             publishers_list, raw_output
         )

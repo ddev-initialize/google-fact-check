@@ -14,27 +14,24 @@ class Storage:
     def save_claims(
         self, claims: list[FlattenedClaim], filename: str, append: bool = True
     ) -> int:
-        """Save flattened claims to Parquet file."""
+        """Save flattened claims to JSONL file."""
         if not claims:
             return 0
 
-        data = [claim.model_dump() for claim in claims]
-        df = pl.DataFrame(data)
         filepath = self.output_dir / filename
+        mode = "a" if (append and filepath.exists()) else "w"
 
-        if append and filepath.exists():
-            existing_df = pl.read_parquet(filepath)
-            df = pl.concat([existing_df, df])
+        with open(filepath, mode) as f:
+            for claim in claims:
+                f.write(json.dumps(claim.model_dump()) + "\n")
 
-        df.write_parquet(filepath, compression="snappy")
         logger.debug(f"Saved {len(claims)} claims to {filename}")
-
         return len(claims)
 
     def deduplicate_file(self, input_file: str, output_file: str) -> pl.DataFrame:
         """Deduplicate dataset by review_url."""
         filepath = self.output_dir / input_file
-        df = pl.read_parquet(filepath)
+        df = pl.read_ndjson(filepath)
         original_count = len(df)
 
         df_deduped = df.unique(subset=["review_url"], keep="first")
