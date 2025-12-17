@@ -216,7 +216,7 @@ async def main():
         logger.info("PHASE 1: Publisher Discovery")
         logger.info("=" * 70)
 
-        publishers = await collector.discover_publishers(max_queries=20)
+        publishers = await collector.discover_publishers(max_queries=200)
         publishers_list = sorted(list(publishers))
 
         storage.save_json(publishers_list, "publishers.json")
