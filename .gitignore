@@ -13,4 +13,4 @@ wheels/
 secrets
 
 *.log
-factcheck_data
+*.bak
