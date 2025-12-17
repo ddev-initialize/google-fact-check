@@ -14,3 +14,5 @@ secrets
 
 *.log
 *.bak
+.DS_STORE
+playground.py
