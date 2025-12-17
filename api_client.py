@@ -17,7 +17,7 @@ class FactCheckApiClient:
     BASE_URL = "https://factchecktools.googleapis.com/v1alpha1/claims:search"
 
     DEFAULT_REQUESTS_PER_MINUTE = 300
-    DEFAULT_MAX_CONCURRENT = 10
+    DEFAULT_MAX_CONCURRENT = 20
     RATE_LIMIT_WINDOW_SECONDS = 60
     REQUEST_TIMEOUT_SECONDS = 30
     RETRY_AFTER_DEFAULT_SECONDS = 60
@@ -25,7 +25,8 @@ class FactCheckApiClient:
     RETRY_BACKOFF_MIN_SECONDS = 4
     RETRY_BACKOFF_MAX_SECONDS = 60
     RETRY_BACKOFF_MULTIPLIER = 1
-    LOG_PROGRESS_EVERY_N_PAGES = 10
+    LOG_PROGRESS_EVERY_N_PAGES = 20
+    DEFAULT_PAGE_SIZE = 1000
 
     def __init__(
         self,
@@ -50,7 +51,7 @@ class FactCheckApiClient:
             self._reset_rate_limit())
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):  # noqa: ANN001
+    async def __aexit__(self, _exc_type, _exc_val, _exc_tb):  # noqa: ANN001
         if self.rate_limit_reset_task:
             self.rate_limit_reset_task.cancel()
             try:
@@ -85,7 +86,7 @@ class FactCheckApiClient:
         query: Optional[str] = None,
         publisher_filter: Optional[str] = None,
         page_token: Optional[str] = None,
-        page_size: int = 100,
+        page_size: int = DEFAULT_PAGE_SIZE,
         language_code: Optional[str] = None,
         max_age_days: Optional[int] = None,
     ) -> FactCheckApiResponse:
@@ -131,7 +132,7 @@ class FactCheckApiClient:
         self,
         query: Optional[str] = None,
         publisher_filter: Optional[str] = None,
-        page_size: int = 100,
+        page_size: int = DEFAULT_PAGE_SIZE,
         language_code: Optional[str] = None,
         max_age_days: Optional[int] = None,
     ) -> list[FactCheckApiResponse]:

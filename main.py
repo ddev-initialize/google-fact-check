@@ -29,6 +29,9 @@ class FactCheckCollector:
     DEFAULT_PAGE_SIZE = 100
     DEFAULT_DISCOVERY_MAX_QUERIES = 200
     SAVE_BATCH_EVERY_N_PAGES = 10
+    MAX_CONCURRENT_PUBLISHERS = 10
+    MAX_CONCURRENT_DISCOVERY_QUERIES = 10
+
     def __init__(
         self,
         api_client: FactCheckApiClient,
@@ -41,20 +44,17 @@ class FactCheckCollector:
         self.total_claims = 0
         self.errors: list[dict[str, str | int]] = []
 
-    async def discover_publishers(self, max_queries: int | None = None) -> set[str]:
-        """Discover unique publisher sites using broad queries."""
-        if max_queries is None:
-            max_queries = self.DEFAULT_DISCOVERY_MAX_QUERIES
-
-        discovery_queries = self._get_default_discovery_queries()
-        random.shuffle(discovery_queries)
-
-        num_queries = min(max_queries, len(discovery_queries))
-        logger.info(f"Starting publisher discovery with {num_queries} queries")
-        publishers = set()
-
-        for i, query in enumerate(discovery_queries[:num_queries], 1):
-            logger.info(f"[{i}/{num_queries}] Discovery query: '{query}'")
+    async def _discover_query_with_semaphore(
+        self,
+        semaphore: asyncio.Semaphore,
+        query: str,
+        publishers: set[str],
+        index: int,
+        total: int,
+    ) -> int:
+        """Execute a single discovery query with semaphore control."""
+        async with semaphore:
+            logger.info(f"[{index}/{total}] Discovery query: '{query}'")
 
             try:
                 response = await self.api_client.fetch_page(
@@ -63,12 +63,42 @@ class FactCheckCollector:
                 query_publishers = self.processor.extract_publishers(
                     response.claims)
                 publishers.update(query_publishers)
+
                 logger.info(
-                    f"Found {len(publishers)} unique publishers so far")
+                    f"Query '{query}' found {len(query_publishers)} publishers, "
+                    f"total now: {len(publishers)}"
+                )
+                return len(query_publishers)
 
             except Exception as e:
                 logger.error(f"Discovery query '{query}' failed: {e}")
-                continue
+                return 0
+
+    async def discover_publishers(self, max_queries: int | None = None) -> set[str]:
+        """Discover unique publisher sites using concurrent broad queries."""
+        if max_queries is None:
+            max_queries = self.DEFAULT_DISCOVERY_MAX_QUERIES
+
+        discovery_queries = self._get_default_discovery_queries()
+        random.shuffle(discovery_queries)
+
+        num_queries = min(max_queries, len(discovery_queries))
+        logger.info(
+            f"Starting concurrent publisher discovery with {num_queries} queries "
+            f"(max {self.MAX_CONCURRENT_DISCOVERY_QUERIES} at a time)"
+        )
+
+        publishers: set[str] = set()
+        semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_DISCOVERY_QUERIES)
+
+        tasks = [
+            self._discover_query_with_semaphore(
+                semaphore, query, publishers, i, num_queries
+            )
+            for i, query in enumerate(discovery_queries[:num_queries], 1)
+        ]
+
+        await asyncio.gather(*tasks, return_exceptions=True)
 
         logger.success(
             f"Discovery complete: {len(publishers)} publishers found")
@@ -97,7 +127,7 @@ class FactCheckCollector:
 
                 if page_count % self.SAVE_BATCH_EVERY_N_PAGES == 0:
                     flattened = self.processor.flatten_claims(batch_claims)
-                    saved_count = self.storage.save_claims(
+                    saved_count = await self.storage.save_claims(
                         flattened, output_file, append=True
                     )
                     total_count += saved_count
@@ -109,13 +139,14 @@ class FactCheckCollector:
 
             if batch_claims:
                 flattened = self.processor.flatten_claims(batch_claims)
-                saved_count = self.storage.save_claims(
+                saved_count = await self.storage.save_claims(
                     flattened, output_file, append=True
                 )
                 total_count += saved_count
 
             logger.success(
                 f"Publisher {publisher}: {total_count} claims collected")
+            self.total_claims += total_count
             return total_count
 
         except Exception as e:
@@ -125,21 +156,51 @@ class FactCheckCollector:
             )
             if batch_claims:
                 flattened = self.processor.flatten_claims(batch_claims)
-                self.storage.save_claims(flattened, output_file, append=True)
+                await self.storage.save_claims(flattened, output_file, append=True)
             return total_count
+
+    async def _collect_publisher_with_semaphore(
+        self,
+        semaphore: asyncio.Semaphore,
+        publisher: str,
+        output_file: str,
+        page_size: int | None,
+        index: int,
+        total: int,
+    ) -> tuple[str, int]:
+        """Collect from a publisher with semaphore-based concurrency control."""
+        async with semaphore:
+            logger.info(f"[{index}/{total}] Processing {publisher}")
+            count = await self.collect_from_publisher(publisher, output_file, page_size)
+            return publisher, count
 
     async def collect_from_publishers(
         self, publishers: list[str], output_file: str, page_size: int | None = None
     ) -> dict[str, int]:
-        """Collect claims from multiple publishers."""
-        logger.info(f"Starting collection from {len(publishers)} publishers")
-        stats = {}
+        """Collect claims from multiple publishers concurrently."""
+        logger.info(
+            f"Starting concurrent collection from {len(publishers)} publishers "
+            f"(max {self.MAX_CONCURRENT_PUBLISHERS} at a time)"
+        )
 
-        for i, publisher in enumerate(publishers, 1):
-            logger.info(f"[{i}/{len(publishers)}] Processing {publisher}")
-            count = await self.collect_from_publisher(publisher, output_file, page_size)
-            stats[publisher] = count
-            self.total_claims += count
+        semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_PUBLISHERS)
+        tasks = [
+            self._collect_publisher_with_semaphore(
+                semaphore, publisher, output_file, page_size, i, len(
+                    publishers)
+            )
+            for i, publisher in enumerate(publishers, 1)
+        ]
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        stats = {}
+        for result in results:
+            if isinstance(result, BaseException):
+                logger.error(f"Publisher task failed: {result}")
+            else:
+                publisher, count = result
+                stats[publisher] = count
 
         return stats
 

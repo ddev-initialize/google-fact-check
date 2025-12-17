@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import asyncio
 import polars as pl
 from loguru import logger
 
@@ -10,23 +11,32 @@ class Storage:
     def __init__(self, output_dir: str = "factcheck_data"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
+        self._file_locks: dict[str, asyncio.Lock] = {}
 
-    def save_claims(
+    def _get_file_lock(self, filename: str) -> asyncio.Lock:
+        """Get or create a lock for a specific file."""
+        if filename not in self._file_locks:
+            self._file_locks[filename] = asyncio.Lock()
+        return self._file_locks[filename]
+
+    async def save_claims(
         self, claims: list[FlattenedClaim], filename: str, append: bool = True
     ) -> int:
-        """Save flattened claims to JSONL file."""
+        """Save flattened claims to JSONL file with concurrency safety."""
         if not claims:
             return 0
 
-        filepath = self.output_dir / filename
-        mode = "a" if (append and filepath.exists()) else "w"
+        lock = self._get_file_lock(filename)
+        async with lock:
+            filepath = self.output_dir / filename
+            mode = "a" if (append and filepath.exists()) else "w"
 
-        with open(filepath, mode) as f:
-            for claim in claims:
-                f.write(json.dumps(claim.model_dump()) + "\n")
+            with open(filepath, mode) as f:
+                for claim in claims:
+                    f.write(json.dumps(claim.model_dump()) + "\n")
 
-        logger.debug(f"Saved {len(claims)} claims to {filename}")
-        return len(claims)
+            logger.debug(f"Saved {len(claims)} claims to {filename}")
+            return len(claims)
 
     def deduplicate_file(self, input_file: str, output_file: str) -> pl.DataFrame:
         """Deduplicate dataset by review_url."""
