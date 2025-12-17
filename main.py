@@ -1,6 +1,7 @@
 import os
 import asyncio
 from datetime import datetime
+from pathlib import Path
 import random
 from dotenv import load_dotenv
 from loguru import logger
@@ -16,9 +17,11 @@ assert FACTCHECK_API_KEY, "FACTCHECK_API_KEY environment variable is required"
 
 LOG_ROTATION_SIZE = "100 MB"
 LOG_RETENTION_DAYS = "10 days"
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
 
 logger.add(
-    "factcheck_{time}.log",
+    LOG_DIR / "factcheck_{time}.log",
     rotation=LOG_ROTATION_SIZE,
     retention=LOG_RETENTION_DAYS,
     level="DEBUG",
@@ -28,6 +31,7 @@ logger.add(
 class FactCheckCollector:
     DEFAULT_PAGE_SIZE = 100
     DEFAULT_DISCOVERY_MAX_QUERIES = 200
+    DEFAULT_DISCOVERY_NUM_PAGES = 5
     SAVE_BATCH_EVERY_N_PAGES = 10
 
     def __init__(
@@ -53,10 +57,11 @@ class FactCheckCollector:
         logger.info(f"[{index}/{total}] Discovery query: '{query}'")
 
         try:
-            response = await self.api_client.fetch_page(
-                query=query, page_size=self.DEFAULT_PAGE_SIZE
+            responses = await self.api_client.fetch_n_pages(
+                num_pages=self.DEFAULT_DISCOVERY_NUM_PAGES, query=query, page_size=self.DEFAULT_PAGE_SIZE
             )
-            query_publishers = self.processor.extract_publishers(response.claims)
+            query_publishers = self.processor.extract_publishers(
+                [c for r in responses for c in r.claims])
             publishers.update(query_publishers)
 
             logger.info(
@@ -78,7 +83,8 @@ class FactCheckCollector:
         random.shuffle(discovery_queries)
 
         num_queries = min(max_queries, len(discovery_queries))
-        logger.info(f"Starting concurrent publisher discovery with {num_queries} queries")
+        logger.info(
+            f"Starting concurrent publisher discovery with {num_queries} queries")
 
         publishers: set[str] = set()
         tasks = [
@@ -88,7 +94,8 @@ class FactCheckCollector:
 
         await asyncio.gather(*tasks, return_exceptions=True)
 
-        logger.success(f"Discovery complete: {len(publishers)} publishers found")
+        logger.success(
+            f"Discovery complete: {len(publishers)} publishers found")
         return publishers
 
     async def collect_from_publisher(
@@ -163,7 +170,8 @@ class FactCheckCollector:
         self, publishers: list[str], output_file: str, page_size: int | None = None
     ) -> dict[str, int]:
         """Collect claims from multiple publishers concurrently."""
-        logger.info(f"Starting concurrent collection from {len(publishers)} publishers")
+        logger.info(
+            f"Starting concurrent collection from {len(publishers)} publishers")
 
         tasks = [
             self._collect_single_publisher(
@@ -252,7 +260,7 @@ class FactCheckCollector:
         queries.extend([
             "new", "says", "did", "will", "does", "can", "has", "was",
             "make", "said", "man", "woman", "people", "bill", "food",
-            "water", "fire", "kill", "die", "dead", "safe", "ban"
+            "water", "fire", "kill", "die", "dead", "safe", "ban", "a", "i"
         ])
 
         return queries

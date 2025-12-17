@@ -17,7 +17,7 @@ class FactCheckApiClient:
     BASE_URL = "https://factchecktools.googleapis.com/v1alpha1/claims:search"
 
     DEFAULT_REQUESTS_PER_MINUTE = 300
-    DEFAULT_MAX_CONCURRENT = 20
+    DEFAULT_MAX_CONCURRENT = 16
     RATE_LIMIT_WINDOW_SECONDS = 60
     REQUEST_TIMEOUT_SECONDS = 30
     RETRY_AFTER_DEFAULT_SECONDS = 60
@@ -141,6 +141,44 @@ class FactCheckApiClient:
         page_count = 0
 
         while True:
+            try:
+                response = await self.fetch_page(
+                    query=query,
+                    publisher_filter=publisher_filter,
+                    page_token=page_token,
+                    page_size=page_size,
+                    language_code=language_code,
+                    max_age_days=max_age_days,
+                )
+
+                responses.append(response)
+                page_count += 1
+
+                if page_count % self.LOG_PROGRESS_EVERY_N_PAGES == 0:
+                    logger.debug(f"Fetched {page_count} pages")
+
+                page_token = response.next_page_token
+                if not page_token:
+                    break
+
+            except Exception as e:
+                logger.error(f"Error fetching page {page_count + 1}: {e}")
+                break
+
+        return responses
+
+    async def fetch_n_pages(
+        self,
+        num_pages: int = 1,
+        query: Optional[str] = None,
+        publisher_filter: Optional[str] = None,
+        page_size: int = DEFAULT_PAGE_SIZE,
+        language_code: Optional[str] = None,
+        max_age_days: Optional[int] = None,
+    ) -> list[FactCheckApiResponse]:
+        responses = []
+        page_token = None
+        for page_count in range(num_pages):
             try:
                 response = await self.fetch_page(
                     query=query,
