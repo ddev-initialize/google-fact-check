@@ -12,7 +12,7 @@ wheels/
 .env 
 secrets
 
-*.log
+logs
 *.bak
 .DS_STORE
 playground.py
