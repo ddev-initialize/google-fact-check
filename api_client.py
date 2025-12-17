@@ -15,29 +15,39 @@ from contracts import FactCheckApiResponse
 
 class FactCheckApiClient:
     BASE_URL = "https://factchecktools.googleapis.com/v1alpha1/claims:search"
-    DEFAULT_REQUESTS_PER_100S = 1000
+
+    DEFAULT_REQUESTS_PER_MINUTE = 300
     DEFAULT_MAX_CONCURRENT = 10
+    RATE_LIMIT_WINDOW_SECONDS = 60
+    REQUEST_TIMEOUT_SECONDS = 30
+    RETRY_AFTER_DEFAULT_SECONDS = 60
+    RETRY_MAX_ATTEMPTS = 5
+    RETRY_BACKOFF_MIN_SECONDS = 4
+    RETRY_BACKOFF_MAX_SECONDS = 60
+    RETRY_BACKOFF_MULTIPLIER = 1
+    LOG_PROGRESS_EVERY_N_PAGES = 10
 
     def __init__(
         self,
         api_key: str,
         max_concurrent: int = DEFAULT_MAX_CONCURRENT,
-        requests_per_100s: int = DEFAULT_REQUESTS_PER_100S,
+        requests_per_minute: int = DEFAULT_REQUESTS_PER_MINUTE,
     ):
         self.api_key = api_key
         self.max_concurrent = max_concurrent
-        self.requests_per_100s = requests_per_100s
+        self.requests_per_minute = requests_per_minute
 
         self.session: Optional[aiohttp.ClientSession] = None
         self.semaphore = asyncio.Semaphore(max_concurrent)
-        self.rate_limiter = asyncio.Semaphore(requests_per_100s)
+        self.rate_limiter = asyncio.Semaphore(requests_per_minute)
         self.rate_limit_reset_task: Optional[asyncio.Task] = None
 
         self.total_requests = 0
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
-        self.rate_limit_reset_task = asyncio.create_task(self._reset_rate_limit())
+        self.rate_limit_reset_task = asyncio.create_task(
+            self._reset_rate_limit())
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):  # noqa: ANN001
@@ -52,17 +62,22 @@ class FactCheckApiClient:
 
     async def _reset_rate_limit(self):
         while True:
-            await asyncio.sleep(100)
-            for _ in range(self.requests_per_100s):
+            await asyncio.sleep(self.RATE_LIMIT_WINDOW_SECONDS)
+            for _ in range(self.requests_per_minute):
                 try:
                     self.rate_limiter.release()
                 except ValueError:
                     break
 
     @retry(
-        retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
-        wait=wait_exponential(multiplier=1, min=4, max=60),
-        stop=stop_after_attempt(5),
+        retry=retry_if_exception_type(
+            (aiohttp.ClientError, asyncio.TimeoutError)),
+        wait=wait_exponential(
+            multiplier=RETRY_BACKOFF_MULTIPLIER,
+            min=RETRY_BACKOFF_MIN_SECONDS,
+            max=RETRY_BACKOFF_MAX_SECONDS,
+        ),
+        stop=stop_after_attempt(RETRY_MAX_ATTEMPTS),
         reraise=True,
     )
     async def fetch_page(
@@ -94,12 +109,16 @@ class FactCheckApiClient:
         async with self.rate_limiter:
             async with self.semaphore:
                 self.total_requests += 1
-                timeout = ClientTimeout(total=30)
+                timeout = ClientTimeout(total=self.REQUEST_TIMEOUT_SECONDS)
                 async with self.session.get(
                     self.BASE_URL, params=params, timeout=timeout
                 ) as response:
                     if response.status == 429:
-                        retry_after = int(response.headers.get("Retry-After", 60))
+                        retry_after = int(
+                            response.headers.get(
+                                "Retry-After", self.RETRY_AFTER_DEFAULT_SECONDS
+                            )
+                        )
                         logger.warning(f"Rate limited. Waiting {retry_after}s")
                         await asyncio.sleep(retry_after)
                         raise aiohttp.ClientError("Rate limited")
@@ -134,7 +153,7 @@ class FactCheckApiClient:
                 responses.append(response)
                 page_count += 1
 
-                if page_count % 10 == 0:
+                if page_count % self.LOG_PROGRESS_EVERY_N_PAGES == 0:
                     logger.debug(f"Fetched {page_count} pages")
 
                 page_token = response.next_page_token

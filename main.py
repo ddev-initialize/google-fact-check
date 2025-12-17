@@ -14,13 +14,21 @@ load_dotenv()
 FACTCHECK_API_KEY = os.environ.get("FACTCHECK_API_KEY")
 assert FACTCHECK_API_KEY, "FACTCHECK_API_KEY environment variable is required"
 
+LOG_ROTATION_SIZE = "100 MB"
+LOG_RETENTION_DAYS = "10 days"
+
 logger.add(
     "factcheck_{time}.log",
-    rotation="100 MB",
+    rotation=LOG_ROTATION_SIZE,
+    retention=LOG_RETENTION_DAYS,
+    level="DEBUG",
 )
 
 
 class FactCheckCollector:
+    DEFAULT_PAGE_SIZE = 100
+    DEFAULT_DISCOVERY_MAX_QUERIES = 200
+    SAVE_BATCH_EVERY_N_PAGES = 10
     def __init__(
         self,
         api_client: FactCheckApiClient,
@@ -33,8 +41,11 @@ class FactCheckCollector:
         self.total_claims = 0
         self.errors: list[dict[str, str | int]] = []
 
-    async def discover_publishers(self, max_queries: int = 20) -> set[str]:
+    async def discover_publishers(self, max_queries: int | None = None) -> set[str]:
         """Discover unique publisher sites using broad queries."""
+        if max_queries is None:
+            max_queries = self.DEFAULT_DISCOVERY_MAX_QUERIES
+
         discovery_queries = self._get_default_discovery_queries()
         random.shuffle(discovery_queries)
 
@@ -46,7 +57,9 @@ class FactCheckCollector:
             logger.info(f"[{i}/{num_queries}] Discovery query: '{query}'")
 
             try:
-                response = await self.api_client.fetch_page(query=query, page_size=100)
+                response = await self.api_client.fetch_page(
+                    query=query, page_size=self.DEFAULT_PAGE_SIZE
+                )
                 query_publishers = self.processor.extract_publishers(
                     response.claims)
                 publishers.update(query_publishers)
@@ -62,9 +75,12 @@ class FactCheckCollector:
         return publishers
 
     async def collect_from_publisher(
-        self, publisher: str, output_file: str, page_size: int = 100
+        self, publisher: str, output_file: str, page_size: int | None = None
     ) -> int:
         """Collect all claims from a single publisher with streaming saves."""
+        if page_size is None:
+            page_size = self.DEFAULT_PAGE_SIZE
+
         logger.info(f"Collecting from publisher: {publisher}")
         batch_claims: list[Claim] = []
         page_count = 0
@@ -79,7 +95,7 @@ class FactCheckCollector:
                 batch_claims.extend(response.claims)
                 page_count += 1
 
-                if page_count % 10 == 0:
+                if page_count % self.SAVE_BATCH_EVERY_N_PAGES == 0:
                     flattened = self.processor.flatten_claims(batch_claims)
                     saved_count = self.storage.save_claims(
                         flattened, output_file, append=True
@@ -113,7 +129,7 @@ class FactCheckCollector:
             return total_count
 
     async def collect_from_publishers(
-        self, publishers: list[str], output_file: str, page_size: int = 100
+        self, publishers: list[str], output_file: str, page_size: int | None = None
     ) -> dict[str, int]:
         """Collect claims from multiple publishers."""
         logger.info(f"Starting collection from {len(publishers)} publishers")
@@ -205,9 +221,7 @@ async def main():
     assert FACTCHECK_API_KEY is not None
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    async with FactCheckApiClient(
-        FACTCHECK_API_KEY, max_concurrent=10, requests_per_100s=1000
-    ) as api_client:
+    async with FactCheckApiClient(FACTCHECK_API_KEY) as api_client:
         storage = Storage()
         processor = DataProcessor()
         collector = FactCheckCollector(api_client, storage, processor)
@@ -224,7 +238,7 @@ async def main():
             publishers_list: list[str] = loaded_data
             logger.info(f"Loaded {len(publishers_list)} publishers from cache")
         else:
-            publishers = await collector.discover_publishers(max_queries=200)
+            publishers = await collector.discover_publishers()
             publishers_list = sorted(list(publishers))
             storage.save_json(publishers_list, "publishers.json")
             logger.info(
