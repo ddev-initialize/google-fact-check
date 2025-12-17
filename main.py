@@ -29,8 +29,6 @@ class FactCheckCollector:
     DEFAULT_PAGE_SIZE = 100
     DEFAULT_DISCOVERY_MAX_QUERIES = 200
     SAVE_BATCH_EVERY_N_PAGES = 10
-    MAX_CONCURRENT_PUBLISHERS = 10
-    MAX_CONCURRENT_DISCOVERY_QUERIES = 10
 
     def __init__(
         self,
@@ -44,35 +42,32 @@ class FactCheckCollector:
         self.total_claims = 0
         self.errors: list[dict[str, str | int]] = []
 
-    async def _discover_query_with_semaphore(
+    async def _discover_single_query(
         self,
-        semaphore: asyncio.Semaphore,
         query: str,
         publishers: set[str],
         index: int,
         total: int,
     ) -> int:
-        """Execute a single discovery query with semaphore control."""
-        async with semaphore:
-            logger.info(f"[{index}/{total}] Discovery query: '{query}'")
+        """Execute a single discovery query."""
+        logger.info(f"[{index}/{total}] Discovery query: '{query}'")
 
-            try:
-                response = await self.api_client.fetch_page(
-                    query=query, page_size=self.DEFAULT_PAGE_SIZE
-                )
-                query_publishers = self.processor.extract_publishers(
-                    response.claims)
-                publishers.update(query_publishers)
+        try:
+            response = await self.api_client.fetch_page(
+                query=query, page_size=self.DEFAULT_PAGE_SIZE
+            )
+            query_publishers = self.processor.extract_publishers(response.claims)
+            publishers.update(query_publishers)
 
-                logger.info(
-                    f"Query '{query}' found {len(query_publishers)} publishers, "
-                    f"total now: {len(publishers)}"
-                )
-                return len(query_publishers)
+            logger.info(
+                f"Query '{query}' found {len(query_publishers)} publishers, "
+                f"total now: {len(publishers)}"
+            )
+            return len(query_publishers)
 
-            except Exception as e:
-                logger.error(f"Discovery query '{query}' failed: {e}")
-                return 0
+        except Exception as e:
+            logger.error(f"Discovery query '{query}' failed: {e}")
+            return 0
 
     async def discover_publishers(self, max_queries: int | None = None) -> set[str]:
         """Discover unique publisher sites using concurrent broad queries."""
@@ -83,25 +78,17 @@ class FactCheckCollector:
         random.shuffle(discovery_queries)
 
         num_queries = min(max_queries, len(discovery_queries))
-        logger.info(
-            f"Starting concurrent publisher discovery with {num_queries} queries "
-            f"(max {self.MAX_CONCURRENT_DISCOVERY_QUERIES} at a time)"
-        )
+        logger.info(f"Starting concurrent publisher discovery with {num_queries} queries")
 
         publishers: set[str] = set()
-        semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_DISCOVERY_QUERIES)
-
         tasks = [
-            self._discover_query_with_semaphore(
-                semaphore, query, publishers, i, num_queries
-            )
+            self._discover_single_query(query, publishers, i, num_queries)
             for i, query in enumerate(discovery_queries[:num_queries], 1)
         ]
 
         await asyncio.gather(*tasks, return_exceptions=True)
 
-        logger.success(
-            f"Discovery complete: {len(publishers)} publishers found")
+        logger.success(f"Discovery complete: {len(publishers)} publishers found")
         return publishers
 
     async def collect_from_publisher(
@@ -159,35 +146,28 @@ class FactCheckCollector:
                 await self.storage.save_claims(flattened, output_file, append=True)
             return total_count
 
-    async def _collect_publisher_with_semaphore(
+    async def _collect_single_publisher(
         self,
-        semaphore: asyncio.Semaphore,
         publisher: str,
         output_file: str,
         page_size: int | None,
         index: int,
         total: int,
     ) -> tuple[str, int]:
-        """Collect from a publisher with semaphore-based concurrency control."""
-        async with semaphore:
-            logger.info(f"[{index}/{total}] Processing {publisher}")
-            count = await self.collect_from_publisher(publisher, output_file, page_size)
-            return publisher, count
+        """Collect from a single publisher."""
+        logger.info(f"[{index}/{total}] Processing {publisher}")
+        count = await self.collect_from_publisher(publisher, output_file, page_size)
+        return publisher, count
 
     async def collect_from_publishers(
         self, publishers: list[str], output_file: str, page_size: int | None = None
     ) -> dict[str, int]:
         """Collect claims from multiple publishers concurrently."""
-        logger.info(
-            f"Starting concurrent collection from {len(publishers)} publishers "
-            f"(max {self.MAX_CONCURRENT_PUBLISHERS} at a time)"
-        )
+        logger.info(f"Starting concurrent collection from {len(publishers)} publishers")
 
-        semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_PUBLISHERS)
         tasks = [
-            self._collect_publisher_with_semaphore(
-                semaphore, publisher, output_file, page_size, i, len(
-                    publishers)
+            self._collect_single_publisher(
+                publisher, output_file, page_size, i, len(publishers)
             )
             for i, publisher in enumerate(publishers, 1)
         ]
