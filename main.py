@@ -1,6 +1,7 @@
 import os
 import asyncio
 from datetime import datetime
+import random
 from dotenv import load_dotenv
 from loguru import logger
 
@@ -20,30 +21,6 @@ logger.add(
 
 
 class FactCheckCollector:
-    DISCOVERY_QUERIES = [
-        "covid",
-        "election",
-        "climate",
-        "vaccine",
-        "trump",
-        "biden",
-        "health",
-        "politics",
-        "science",
-        "news",
-        "fact",
-        "claim",
-        "false",
-        "true",
-        "misinformation",
-        "hoax",
-        "debunk",
-        "2024",
-        "2023",
-        "2022",
-        "government",
-    ]
-
     def __init__(
         self,
         api_client: FactCheckApiClient,
@@ -58,11 +35,15 @@ class FactCheckCollector:
 
     async def discover_publishers(self, max_queries: int = 20) -> set[str]:
         """Discover unique publisher sites using broad queries."""
-        logger.info(f"Starting publisher discovery with {max_queries} queries")
+        discovery_queries = self._get_default_discovery_queries()
+        random.shuffle(discovery_queries)
+
+        num_queries = min(max_queries, len(discovery_queries))
+        logger.info(f"Starting publisher discovery with {num_queries} queries")
         publishers = set()
 
-        for i, query in enumerate(self.DISCOVERY_QUERIES[:max_queries], 1):
-            logger.info(f"[{i}/{max_queries}] Discovery query: '{query}'")
+        for i, query in enumerate(discovery_queries[:num_queries], 1):
+            logger.info(f"[{i}/{num_queries}] Discovery query: '{query}'")
 
             try:
                 response = await self.api_client.fetch_page(query=query, page_size=100)
@@ -145,6 +126,79 @@ class FactCheckCollector:
             self.total_claims += count
 
         return stats
+
+    @staticmethod
+    def _get_default_discovery_queries() -> list[str]:
+        """
+        Generate a comprehensive list of discovery queries.
+        Covers years, topics, and common terms to maximize publisher discovery.
+        """
+        queries = []
+
+        # Years (2015-2025)
+        queries.extend([str(year) for year in range(2015, 2027)])
+
+        # Politics & Elections
+        queries.extend([
+            "trump", "biden", "obama", "clinton", "election", "vote",
+            "congress", "senate", "president", "democrat", "republican",
+            "politician", "campaign", "ballot", "poll"
+        ])
+
+        # Health & Medicine
+        queries.extend([
+            "covid", "vaccine", "virus", "health", "doctor", "cure",
+            "medicine", "drug", "hospital", "disease", "cancer", "flu",
+            "mask", "lockdown", "pandemic", "WHO"
+        ])
+
+        # Science & Environment
+        queries.extend([
+            "climate", "warming", "science", "study", "research",
+            "environment", "energy", "solar", "oil", "carbon", "NASA",
+            "space", "earth", "weather", "disaster"
+        ])
+
+        # Technology
+        queries.extend([
+            "tech", "AI", "facebook", "google", "twitter", "apple",
+            "amazon", "data", "hack", "cyber", "phone", "internet"
+        ])
+
+        # Economy & Business
+        queries.extend([
+            "economy", "tax", "job", "wage", "price", "inflation",
+            "stock", "market", "bank", "dollar", "debt", "trade"
+        ])
+
+        # Social Issues
+        queries.extend([
+            "police", "crime", "gun", "law", "court", "judge", "rights",
+            "immigration", "border", "war", "military", "terror",
+            "protest", "violence", "racism", "gender"
+        ])
+
+        # Media & Misinformation
+        queries.extend([
+            "news", "media", "fake", "hoax", "false", "true", "fact",
+            "claim", "rumor", "viral", "video", "photo", "quote",
+            "misinformation", "debunk", "scam", "fraud"
+        ])
+
+        # International
+        queries.extend([
+            "China", "Russia", "Europe", "UK", "India", "Israel",
+            "Ukraine", "Iran", "Mexico", "UN", "NATO"
+        ])
+
+        # Short high-frequency terms
+        queries.extend([
+            "new", "says", "did", "will", "does", "can", "has", "was",
+            "make", "said", "man", "woman", "people", "bill", "food",
+            "water", "fire", "kill", "die", "dead", "safe", "ban"
+        ])
+
+        return queries
 
 
 async def main():

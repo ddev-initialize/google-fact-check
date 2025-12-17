@@ -11,3 +11,6 @@ wheels/
 
 .env 
 secrets
+
+*.log
+factcheck_data
