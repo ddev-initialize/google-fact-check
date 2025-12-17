@@ -8,6 +8,11 @@ from contracts import FlattenedClaim
 
 
 class Storage:
+    @staticmethod
+    def _get_flattened_claim_schema() -> dict[str, type]:
+        """Derive Polars schema from FlattenedClaim Pydantic model."""
+        return {field: pl.Utf8 for field in FlattenedClaim.model_fields.keys()}
+
     def __init__(self, output_dir: str = "factcheck_data"):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
@@ -41,7 +46,8 @@ class Storage:
     def deduplicate_file(self, input_file: str, output_file: str) -> pl.DataFrame:
         """Deduplicate dataset by review_url."""
         filepath = self.output_dir / input_file
-        df = pl.read_ndjson(filepath)
+        schema = self._get_flattened_claim_schema()
+        df = pl.read_ndjson(filepath, schema=schema)
         original_count = len(df)
 
         df_deduped = df.unique(subset=["review_url"], keep="first")
